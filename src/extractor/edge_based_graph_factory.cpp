@@ -34,6 +34,10 @@
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_pipeline.h>
 
+#include <cstdint>
+#include <cmath>
+#include <iomanip>
+
 namespace std
 {
 template <> struct hash<std::pair<NodeID, NodeID>>
@@ -554,6 +558,26 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
             turn_penalties_index.push_back(edge_with_data.turn_index);
         };
 
+/*
+        auto const transfer_data = [&](const EdgeWithData &edge_with_data)
+        {
+            constexpr std::int16_t DEBUG_PREPROCESS_TURN_PENALTY = 1000;
+
+            const auto adjusted_turn_weight_penalty = TurnPenalty{
+                static_cast<std::int16_t>(
+                    static_cast<std::int16_t>(edge_with_data.turn_weight_penalty) +
+                    DEBUG_PREPROCESS_TURN_PENALTY)};
+
+            const auto adjusted_turn_duration_penalty = TurnPenalty{
+                static_cast<std::int16_t>(
+                    static_cast<std::int16_t>(edge_with_data.turn_duration_penalty) +
+                    DEBUG_PREPROCESS_TURN_PENALTY)};
+
+            m_edge_based_edge_list.push_back(edge_with_data.edge);
+            turn_weight_penalties.push_back(adjusted_turn_weight_penalty);
+            turn_duration_penalties.push_back(adjusted_turn_duration_penalty);
+            turn_penalties_index.push_back(edge_with_data.turn_index);
+        };*/
         struct EdgesPipelineBuffer
         {
             std::size_t nodes_processed = 0;
@@ -689,6 +713,773 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
             auto weight_penalty =
                 boost::numeric_cast<TurnPenalty>(extracted_turn.weight * weight_multiplier);
             auto duration_penalty = boost::numeric_cast<TurnPenalty>(extracted_turn.duration * 10.);
+
+
+            const auto add_turn_penalty_safely = [](TurnPenalty original, std::int16_t extra) {
+                using Value = TurnPenalty::value_type;
+
+                const int original_value = static_cast<int>(static_cast<Value>(original));
+                const int extra_value = static_cast<int>(extra);
+
+                const int min_value = static_cast<int>(std::numeric_limits<Value>::min());
+                const int max_value = static_cast<int>(std::numeric_limits<Value>::max());
+
+                const int clamped_value =
+                    std::clamp(original_value + extra_value, min_value, max_value);
+
+                return TurnPenalty{static_cast<Value>(clamped_value)};
+            };
+
+            constexpr std::int16_t SCHOOL_BUS_LINK_UTURN_PENALTY = 3000;
+            constexpr std::int16_t SCHOOL_BUS_GUIDANCE_UTURN_PENALTY = 3000;
+
+            const bool incoming_is_link =
+                edge_data1.flags.road_classification.IsLinkClass();
+
+            const bool outgoing_is_link =
+                edge_data2.flags.road_classification.IsLinkClass();
+
+            const bool involves_link =
+                incoming_is_link || outgoing_is_link;
+
+            // OSRM turn_angle: 180 ~= straight, 0/360 ~= u-turn
+
+            const bool is_school_bus_link_uturn =
+                involves_link;
+
+            const bool is_school_bus_guidance_uturn =
+                is_uturn;
+
+            const auto get_debug_lon_lat = [&](const NodeID node) {
+            const auto coordinate = m_coordinates[node];
+            const auto lon_alias = util::toFloating(coordinate.lon);
+            const auto lat_alias = util::toFloating(coordinate.lat);
+            return std::pair<double, double>{
+                from_alias<double>(lon_alias),
+                from_alias<double>(lat_alias)};
+        };
+
+        const auto [from_lon, from_lat] = get_debug_lon_lat(node_along_road_entering);
+        const auto [via_lon, via_lat] = get_debug_lon_lat(intersection_node);
+        const auto [to_lon, to_lat] = get_debug_lon_lat(node_along_road_exiting);
+
+        const bool is_flamingo_reverse_debug_box =
+            via_lon > -115.2202 && via_lon < -115.2182 &&
+            via_lat > 36.1142 && via_lat < 36.1151;
+
+        if (is_flamingo_reverse_debug_box)
+        {
+            util::Log()
+                << "SCHOOLBUS_FLAMINGO_REVERSE_TURN "
+                << "angle=" << turn_angle
+                << " is_uturn=" << is_uturn
+                << " incoming_is_link=" << incoming_is_link
+                << " outgoing_is_link=" << outgoing_is_link
+                << " link_uturn=" << is_school_bus_link_uturn
+                << " guidance_uturn=" << is_school_bus_guidance_uturn
+                << " from_lon=" << from_lon
+                << " from_lat=" << from_lat
+                << " via_lon=" << via_lon
+                << " via_lat=" << via_lat
+                << " to_lon=" << to_lon
+                << " to_lat=" << to_lat
+                << " from_node=" << node_along_road_entering
+                << " via_node=" << intersection_node
+                << " to_node=" << node_along_road_exiting
+                << " from_edge=" << node_based_edge_from
+                << " to_edge=" << node_based_edge_to;
+        }
+
+
+
+            if (is_school_bus_link_uturn || is_school_bus_guidance_uturn)
+            {
+                const auto school_bus_extra_penalty =
+                    is_school_bus_guidance_uturn
+                        ? SCHOOL_BUS_GUIDANCE_UTURN_PENALTY
+                        : SCHOOL_BUS_LINK_UTURN_PENALTY;
+
+                const auto school_bus_turn_kind =
+                    is_school_bus_guidance_uturn
+                        ? "guidance_uturn"
+                        : "link_uturn";
+
+                weight_penalty =
+                    add_turn_penalty_safely(weight_penalty, school_bus_extra_penalty);
+
+                duration_penalty =
+                    add_turn_penalty_safely(duration_penalty, school_bus_extra_penalty);
+
+                util::Log()
+                    << "SCHOOLBUS_FORBIDDEN_TURN "
+                    << "kind=" << school_bus_turn_kind
+                    << " penalty=" << school_bus_extra_penalty
+                    << " angle=" << turn_angle
+                    << " is_uturn=" << is_uturn
+                    << " incoming_is_link=" << incoming_is_link
+                    << " outgoing_is_link=" << outgoing_is_link
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to;
+            }
+
+
+
+
+            // School bus preprocess penalty v1:
+            // Penalize entering very short local connector edges.
+            // This targets multi-edge turnaround maneuvers that are not exposed as a single is_uturn turn.
+            constexpr std::int16_t SCHOOL_BUS_EXPLICIT_UTURN_PENALTY = 12000;
+            constexpr std::int16_t SCHOOL_BUS_INTERSECTION_INTERNAL_TURN_PENALTY = 300;
+            constexpr std::int16_t SCHOOL_BUS_SHORT_CONNECTOR_PENALTY = 6000;
+            constexpr std::int16_t SCHOOL_BUS_SAME_ROAD_OPPOSITE_PENALTY = 20000;
+            constexpr std::int16_t SCHOOL_BUS_MEDIAN_SHORT_CONNECTOR_PENALTY = 15000;
+            constexpr double SCHOOL_BUS_SHORT_CONNECTOR_THRESHOLD_METERS = 25.0;
+            constexpr double SCHOOL_BUS_LOCAL_TURNAROUND_EDGE_THRESHOLD_METERS = 80.0;
+            constexpr std::int16_t SCHOOL_BUS_LOCAL_SHARP_TURNAROUND_PENALTY = 30000;
+
+
+
+            const auto incoming_edge_length =
+                intersection::findEdgeLength(edge_geometries, node_based_edge_from);
+
+            const auto outgoing_edge_length =
+                intersection::findEdgeLength(edge_geometries, node_based_edge_to);
+
+            const bool from_very_short_edge =
+                incoming_edge_length < SCHOOL_BUS_SHORT_CONNECTOR_THRESHOLD_METERS;
+
+            const auto incoming_priority =
+                static_cast<int>(edge_data1.flags.road_classification.GetPriority());
+
+            const auto outgoing_priority =
+                static_cast<int>(edge_data2.flags.road_classification.GetPriority());
+
+            const bool is_flamingo_debug_area =
+            via_lon > -115.2272 && via_lon < -115.2253 &&
+            via_lat > 36.1140 && via_lat < 36.1149;
+
+
+
+
+
+            if (is_flamingo_debug_area)
+            {
+                util::Log()
+                    << std::fixed << std::setprecision(7)
+                    << "SCHOOLBUS_FLAMINGO_LOCAL_TURN "
+                    << "angle=" << turn_angle
+                    << " is_uturn=" << is_uturn
+                    << " incoming_len=" << incoming_edge_length
+                    << " outgoing_len=" << outgoing_edge_length
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to
+                    << " via_lon=" << via_lon
+                    << " via_lat=" << via_lat;
+            }
+
+            // OSRM turn_angle convention here:
+            // 180 ~= straight, 90/270 ~= left/right, 0/360 ~= u-turn.
+            // We want to catch leaving a short connector via a real turn,
+            // not continuing straight.
+            const bool is_turning_after_short_edge =
+                std::abs(turn_angle - 180.0) > 30.0;
+
+
+            const bool is_near_right_angle_turn =
+                (turn_angle > 70.0 && turn_angle < 110.0) ||
+                (turn_angle > 250.0 && turn_angle < 290.0);
+
+            const bool is_normal_right_angle_non_short_turn =
+                is_near_right_angle_turn &&
+                !from_very_short_edge &&
+                !incoming_is_link &&
+                !outgoing_is_link;
+
+
+            const bool incoming_is_major_road =
+                edge_data1.flags.road_classification.GetPriority() >= 14;
+
+            const bool outgoing_is_major_road =
+                edge_data2.flags.road_classification.GetPriority() >= 14;
+
+            const bool is_major_road_normal_turn =
+                is_near_right_angle_turn &&
+                incoming_is_major_road &&
+                outgoing_is_major_road &&
+                !incoming_is_link &&
+                !outgoing_is_link;
+
+            const bool is_normal_right_angle_short_intersection_turn =
+                is_near_right_angle_turn &&
+                from_very_short_edge &&
+                !incoming_is_link &&
+                !outgoing_is_link &&
+                incoming_edge_length > 10.0 &&
+                incoming_edge_length < 25.0 &&
+                outgoing_edge_length > 30.0 &&
+                outgoing_edge_length < 60.0 &&
+                std::abs(static_cast<int>(incoming_priority) -
+                        static_cast<int>(outgoing_priority)) >= 4;
+
+            const bool is_normal_right_angle_short_internal_turn =
+                is_near_right_angle_turn &&
+                from_very_short_edge &&
+                !incoming_is_link &&
+                !outgoing_is_link &&
+                incoming_edge_length > 10.0 &&
+                incoming_edge_length < 25.0 &&
+                outgoing_edge_length > 10.0 &&
+                outgoing_edge_length < 25.0 &&
+                incoming_priority == 4 &&
+                outgoing_priority == 4;
+
+            const bool is_local_or_service_like =
+                incoming_priority >= 10 &&
+                outgoing_priority >= 10;
+
+            const bool is_school_bus_local_sharp_turnaround =
+                !incoming_is_link &&
+                !outgoing_is_link &&
+                is_local_or_service_like &&
+                incoming_edge_length < SCHOOL_BUS_LOCAL_TURNAROUND_EDGE_THRESHOLD_METERS &&
+                outgoing_edge_length < SCHOOL_BUS_LOCAL_TURNAROUND_EDGE_THRESHOLD_METERS &&
+                (
+                    is_uturn ||
+                    turn_angle < 75.0 ||
+                    turn_angle > 285.0
+                );
+
+
+
+            const bool is_local_to_major_right_angle_connector =
+                is_near_right_angle_turn &&
+                !incoming_is_link &&
+                !outgoing_is_link &&
+                incoming_priority >= 10 &&
+                outgoing_priority <= 4 &&
+                incoming_edge_length < 15.0 &&
+                outgoing_edge_length > 80.0;
+
+            const bool is_school_bus_short_connector =
+                from_very_short_edge &&
+                is_turning_after_short_edge &&
+                !is_major_road_normal_turn &&
+                !is_normal_right_angle_short_intersection_turn &&
+                !is_local_to_major_right_angle_connector;
+
+
+
+            const bool is_dorrell_route_debug_box =
+                via_lon > -115.3169 && via_lon < -115.3162 &&
+                via_lat > 36.2877 && via_lat < 36.2885;
+
+            if (is_dorrell_route_debug_box)
+            {
+                util::Log()
+                    << std::fixed << std::setprecision(6)
+                    << "SCHOOLBUS_DORRELL_ALL_TURNS "
+                    << "angle=" << turn_angle
+                    << " is_uturn=" << is_uturn
+                    << " incoming_len=" << incoming_edge_length
+                    << " outgoing_len=" << outgoing_edge_length
+                    << " incoming_priority=" << incoming_priority
+                    << " outgoing_priority=" << outgoing_priority
+                    << " incoming_is_link=" << incoming_is_link
+                    << " outgoing_is_link=" << outgoing_is_link
+                    << " from_very_short_edge=" << from_very_short_edge
+                    << " is_local_or_service_like=" << is_local_or_service_like
+                    << " is_school_bus_local_sharp_turnaround=" << is_school_bus_local_sharp_turnaround
+                    << " via_lon=" << via_lon
+                    << " via_lat=" << via_lat
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to;
+            }
+
+
+            // Detect A->B->C->D where A->B and C->D are on the same named road
+            // but in opposite directions, with B->C acting as a connector.
+            constexpr double SCHOOL_BUS_MEDIAN_ENTRY_MIN_METERS = 10.0;
+            constexpr double SCHOOL_BUS_MEDIAN_CONNECTOR_MIN_METERS = 10.0;
+            constexpr double SCHOOL_BUS_MEDIAN_CONNECTOR_MAX_METERS = 140.0;
+            constexpr double SCHOOL_BUS_MEDIAN_EXIT_MIN_METERS = 25.0;
+            constexpr double SCHOOL_BUS_MEDIAN_MAIN_MAX_METERS = 260.0;
+            constexpr double SCHOOL_BUS_OPPOSITE_HEADING_MIN_DEGREES = 135.0;
+
+            const auto get_lon_lat = [&](const NodeID node) {
+                const auto coordinate = m_coordinates[node];
+
+                const auto lon_alias = util::toFloating(coordinate.lon);
+                const auto lat_alias = util::toFloating(coordinate.lat);
+
+                return std::pair<double, double>{
+                    from_alias<double>(lon_alias),
+                    from_alias<double>(lat_alias)};
+            };
+
+            const auto heading_degrees = [&](const NodeID from, const NodeID to) {
+                const auto [from_lon, from_lat] = get_lon_lat(from);
+                const auto [to_lon, to_lat] = get_lon_lat(to);
+
+                constexpr double pi = 3.14159265358979323846;
+                constexpr double rad_to_deg = 180.0 / pi;
+                constexpr double deg_to_rad = pi / 180.0;
+
+                const double avg_lat_rad = ((from_lat + to_lat) * 0.5) * deg_to_rad;
+
+                const double dx = (to_lon - from_lon) * std::cos(avg_lat_rad);
+                const double dy = to_lat - from_lat;
+
+                double heading = std::atan2(dx, dy) * rad_to_deg;
+                if (heading < 0.0)
+                {
+                    heading += 360.0;
+                }
+
+                return heading;
+            };
+
+            const auto heading_difference = [](const double heading_a, const double heading_b) {
+                const double diff = std::abs(heading_a - heading_b);
+                return std::min(diff, 360.0 - diff);
+            };
+
+            // B->C should look like entering a median connector.
+            const bool is_connector_turn_angle =
+                (turn_angle > 45.0 && turn_angle < 150.0) ||
+                (turn_angle > 210.0 && turn_angle < 330.0);
+
+            const bool is_connector_scale =
+                incoming_edge_length > SCHOOL_BUS_MEDIAN_ENTRY_MIN_METERS &&
+                incoming_edge_length < SCHOOL_BUS_MEDIAN_MAIN_MAX_METERS &&
+                outgoing_edge_length > SCHOOL_BUS_MEDIAN_CONNECTOR_MIN_METERS &&
+                outgoing_edge_length < SCHOOL_BUS_MEDIAN_CONNECTOR_MAX_METERS;
+
+
+            const bool is_school_bus_median_short_connector =
+                is_school_bus_short_connector &&
+                is_connector_turn_angle &&
+                incoming_edge_length > 10.0 &&
+                incoming_edge_length < 25.0 &&
+                outgoing_edge_length > 35.0 &&
+                outgoing_edge_length < 140.0 &&
+                !is_normal_right_angle_short_intersection_turn &&
+                !(
+                    is_near_right_angle_turn &&
+                    incoming_priority >= 10 &&
+                    outgoing_priority >= 10
+                );
+
+
+            bool is_school_bus_same_road_opposite_uturn = false;
+
+            const bool is_rancho_debug_box =
+                via_lon > -115.1735 && via_lon < -115.1730 &&
+                via_lat > 36.1456 && via_lat < 36.1460;
+
+            if (is_rancho_debug_box)
+            {
+                util::Log()
+                    << std::fixed << std::setprecision(6)
+                    << "SCHOOLBUS_RANCHO_ALL_TURNS "
+                    << "angle=" << turn_angle
+                    << " is_uturn=" << is_uturn
+                    << " incoming_len=" << incoming_edge_length
+                    << " outgoing_len=" << outgoing_edge_length
+                    << " incoming_priority=" << incoming_priority
+                    << " outgoing_priority=" << outgoing_priority
+                    << " incoming_is_link=" << incoming_is_link
+                    << " outgoing_is_link=" << outgoing_is_link
+                    << " from_very_short_edge=" << from_very_short_edge
+                    << " is_local_or_service_like=" << is_local_or_service_like
+                    << " is_school_bus_short_connector=" << is_school_bus_short_connector
+                    << " is_school_bus_median_short_connector=" << is_school_bus_median_short_connector
+                    << " is_school_bus_same_road_opposite_uturn=" << is_school_bus_same_road_opposite_uturn
+                    << " is_school_bus_local_sharp_turnaround=" << is_school_bus_local_sharp_turnaround
+                    << " via_lon=" << via_lon
+                    << " via_lat=" << via_lat
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to;
+            }
+
+            const auto is_same_road_opposite_exit = [&](const NodeID exit_from,
+                                            const NodeID exit_to,
+                                            const EdgeID exit_edge,
+                                            const double incoming_heading,
+                                            const auto &incoming_annotation,
+                                            const double accumulated_connector_length) {
+                    const auto &exit_edge_data = m_node_based_graph.GetEdgeData(exit_edge);
+
+                    const auto &exit_annotation =
+                        m_edge_based_node_container.GetAnnotation(exit_edge_data.annotation_data);
+
+
+                    const bool incoming_named =
+                        incoming_annotation.string_view_id != EMPTY_STRINGVIEWID;
+
+                    const bool exit_named =
+                        exit_annotation.string_view_id != EMPTY_STRINGVIEWID;
+
+                    const bool both_named_same =
+                        incoming_named &&
+                        incoming_annotation.string_view_id == exit_annotation.string_view_id;
+
+                    const bool named_to_empty =
+                        incoming_named && !exit_named;
+
+                    const bool name_compatible =
+                        both_named_same || named_to_empty;
+
+                    const auto exit_edge_length =
+                        intersection::findEdgeLength(edge_geometries, exit_edge);
+
+                    const double exit_heading = heading_degrees(exit_from, exit_to);
+                    const double heading_diff = heading_difference(incoming_heading, exit_heading);
+
+                    const bool opposite_direction =
+                        heading_diff > SCHOOL_BUS_OPPOSITE_HEADING_MIN_DEGREES;
+
+                    const bool exit_scale =
+                        exit_edge_length > SCHOOL_BUS_MEDIAN_EXIT_MIN_METERS &&
+                        exit_edge_length < SCHOOL_BUS_MEDIAN_MAIN_MAX_METERS;
+
+                    const auto debug_via_coordinate = m_coordinates[intersection_node];
+                    const auto debug_via_lon_alias = util::toFloating(debug_via_coordinate.lon);
+                    const auto debug_via_lat_alias = util::toFloating(debug_via_coordinate.lat);
+
+                    const double debug_via_lon = from_alias<double>(debug_via_lon_alias);
+                    const double debug_via_lat = from_alias<double>(debug_via_lat_alias);
+
+                    const bool is_flamingo_debug =
+                        debug_via_lon > -115.2325 && debug_via_lon < -115.2305 &&
+                        debug_via_lat > 36.1143 && debug_via_lat < 36.1149;
+
+                    if (is_flamingo_debug)
+                    {
+                        util::Log()
+                            << "SCHOOLBUS_LOOKAHEAD_EXIT_TRY "
+                            << "same_named=" << name_compatible
+                            << " opposite=" << opposite_direction
+                            << " exit_scale=" << exit_scale
+                            << " connector_len=" << accumulated_connector_length
+                            << " exit_len=" << exit_edge_length
+                            << " heading_in=" << incoming_heading
+                            << " heading_out=" << exit_heading
+                            << " heading_diff=" << heading_diff
+                            << " incoming_string_view_id=" << incoming_annotation.string_view_id
+                            << " exit_string_view_id=" << exit_annotation.string_view_id
+                            << " via_lon=" << debug_via_lon
+                            << " via_lat=" << debug_via_lat
+                            << " from_node=" << node_along_road_entering
+                            << " via_node=" << intersection_node
+                            << " connector_to_node=" << node_along_road_exiting
+                            << " exit_from_node=" << exit_from
+                            << " exit_to_node=" << exit_to
+                            << " from_edge=" << node_based_edge_from
+                            << " connector_edge=" << node_based_edge_to
+                            << " incoming_priority=" << incoming_priority
+                            << " outgoing_priority=" << outgoing_priority
+                            << " exit_edge=" << exit_edge;
+                    }
+                    const bool connector_chain_scale =
+                        accumulated_connector_length < 180.0;
+                    if (!name_compatible)
+                    {
+                        return false;
+                    }
+
+                    if (opposite_direction && exit_scale && connector_chain_scale)
+                    {
+                        const auto via_coordinate = m_coordinates[intersection_node];
+                        const auto via_lon_alias = util::toFloating(via_coordinate.lon);
+                        const auto via_lat_alias = util::toFloating(via_coordinate.lat);
+
+                        const double via_lon = from_alias<double>(via_lon_alias);
+                        const double via_lat = from_alias<double>(via_lat_alias);
+
+                        util::Log()
+                            << "SCHOOLBUS_SAME_ROAD_OPPOSITE_UTURN "
+                            << "turn_angle=" << turn_angle
+                            << " incoming_len=" << incoming_edge_length
+                            << " connector_len=" << accumulated_connector_length
+                            << " exit_len=" << exit_edge_length
+                            << " heading_in=" << incoming_heading
+                            << " heading_out=" << exit_heading
+                            << " heading_diff=" << heading_diff
+                            << " string_view_id=" << incoming_annotation.string_view_id
+                            << " via_lon=" << via_lon
+                            << " via_lat=" << via_lat
+                            << " from_node=" << node_along_road_entering
+                            << " via_node=" << intersection_node
+                            << " connector_to_node=" << node_along_road_exiting
+                            << " exit_from_node=" << exit_from
+                            << " exit_to_node=" << exit_to
+                            << " from_edge=" << node_based_edge_from
+                            << " connector_edge=" << node_based_edge_to
+                            << " connector_chain_scale=" << connector_chain_scale
+                            << " exit_edge=" << exit_edge;
+
+                        return true;
+                    }
+
+                    return false;
+                };
+
+            const auto debug_coordinate = m_coordinates[intersection_node];
+            const auto debug_lon_alias = util::toFloating(debug_coordinate.lon);
+            const auto debug_lat_alias = util::toFloating(debug_coordinate.lat);
+
+            const double debug_lon = from_alias<double>(debug_lon_alias);
+            const double debug_lat = from_alias<double>(debug_lat_alias);
+
+            const bool is_flamingo_third_debug =
+                debug_lon > -115.2320 && debug_lon < -115.2305 &&
+                debug_lat > 36.1143 && debug_lat < 36.1149;
+
+            if (is_flamingo_third_debug)
+            {
+                util::Log()
+                    << "SCHOOLBUS_MEDIAN_CANDIDATE "
+                    << "angle=" << turn_angle
+                    << " angle_ok=" << is_connector_turn_angle
+                    << " scale_ok=" << is_connector_scale
+                    << " incoming_len=" << incoming_edge_length
+                    << " outgoing_len=" << outgoing_edge_length
+                    << " via_lon=" << debug_lon
+                    << " via_lat=" << debug_lat
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to;
+            }
+
+
+
+            if (is_connector_turn_angle &&
+                is_connector_scale &&
+                !is_normal_right_angle_non_short_turn &&
+                !is_normal_right_angle_short_internal_turn)
+            {
+                const double incoming_heading =
+                    heading_degrees(node_along_road_entering, intersection_node);
+
+                const auto &incoming_annotation =
+                    m_edge_based_node_container.GetAnnotation(edge_data1.annotation_data);
+
+                for (auto next_edge = m_node_based_graph.BeginEdges(node_along_road_exiting);
+                    next_edge < m_node_based_graph.EndEdges(node_along_road_exiting);
+                    ++next_edge)
+                {
+                    const NodeID next_node = m_node_based_graph.GetTarget(next_edge);
+
+                    if (next_node == intersection_node)
+                    {
+                        continue;
+                    }
+
+                    const auto next_edge_length =
+                        intersection::findEdgeLength(edge_geometries, next_edge);
+
+                    const double connector_length_1 =
+                        outgoing_edge_length + next_edge_length;
+
+                    // One-hop exit check: C -> D is already the opposite same road.
+                    if (is_same_road_opposite_exit(node_along_road_exiting,
+                                                next_node,
+                                                next_edge,
+                                                incoming_heading,
+                                                incoming_annotation,
+                                                outgoing_edge_length))
+                    {
+                        is_school_bus_same_road_opposite_uturn = true;
+                        break;
+                    }
+
+                    // Do not walk too far through connector chain.
+                    if (connector_length_1 > 220.0)
+                    {
+                        continue;
+                    }
+
+                    for (auto next2_edge = m_node_based_graph.BeginEdges(next_node);
+                        next2_edge < m_node_based_graph.EndEdges(next_node);
+                        ++next2_edge)
+                    {
+                        const NodeID next2_node = m_node_based_graph.GetTarget(next2_edge);
+
+                        if (next2_node == node_along_road_exiting)
+                        {
+                            continue;
+                        }
+
+                        const auto next2_edge_length =
+                            intersection::findEdgeLength(edge_geometries, next2_edge);
+
+                        const double connector_length_2 =
+                            connector_length_1 + next2_edge_length;
+
+                        if (connector_length_2 > 280.0)
+                        {
+                            continue;
+                        }
+
+                        if (is_same_road_opposite_exit(next_node,
+                                                    next2_node,
+                                                    next2_edge,
+                                                    incoming_heading,
+                                                    incoming_annotation,
+                                                    connector_length_2))
+                        {
+                            is_school_bus_same_road_opposite_uturn = true;
+                            break;
+                        }
+                        for (auto next3_edge = m_node_based_graph.BeginEdges(next2_node);
+                            next3_edge < m_node_based_graph.EndEdges(next2_node);
+                            ++next3_edge)
+                        {
+                            const NodeID next3_node = m_node_based_graph.GetTarget(next3_edge);
+
+                            if (next3_node == next_node)
+                            {
+                                continue;
+                            }
+
+                            const auto next3_edge_length =
+                                intersection::findEdgeLength(edge_geometries, next3_edge);
+
+                            const double connector_length_3 =
+                                connector_length_2 + next3_edge_length;
+
+                            if (connector_length_3 > 320.0)
+                            {
+                                continue;
+                            }
+
+                            if (is_same_road_opposite_exit(next2_node,
+                                                        next3_node,
+                                                        next3_edge,
+                                                        incoming_heading,
+                                                        incoming_annotation,
+                                                        connector_length_3))
+                            {
+                                is_school_bus_same_road_opposite_uturn = true;
+                                break;
+                            }
+                        }
+                    }
+
+
+                    if (is_school_bus_same_road_opposite_uturn)
+                    {
+                        break;
+                    }
+                    if (is_school_bus_same_road_opposite_uturn)
+                    {
+                        break;
+                    }
+                }
+            }
+            const bool is_school_bus_turnaround =
+                is_school_bus_short_connector ||
+                is_school_bus_median_short_connector ||
+                is_school_bus_same_road_opposite_uturn ||
+                is_school_bus_local_sharp_turnaround;
+
+            if (is_school_bus_turnaround)
+            {
+                const auto school_bus_extra_penalty =
+                    is_school_bus_local_sharp_turnaround
+                        ? SCHOOL_BUS_LOCAL_SHARP_TURNAROUND_PENALTY
+                        : (is_uturn
+                            ? SCHOOL_BUS_EXPLICIT_UTURN_PENALTY
+                            : (is_school_bus_same_road_opposite_uturn
+                                ? SCHOOL_BUS_SAME_ROAD_OPPOSITE_PENALTY
+                                : (is_school_bus_median_short_connector
+                                    ? SCHOOL_BUS_MEDIAN_SHORT_CONNECTOR_PENALTY
+                                    : (is_normal_right_angle_short_internal_turn
+                                        ? SCHOOL_BUS_INTERSECTION_INTERNAL_TURN_PENALTY
+                                        : SCHOOL_BUS_SHORT_CONNECTOR_PENALTY))));
+
+
+
+
+                const char *school_bus_turnaround_kind =
+                    is_school_bus_local_sharp_turnaround
+                        ? "local_sharp_turnaround"
+                        : (is_school_bus_same_road_opposite_uturn
+                            ? "same_road_opposite"
+                            : (is_school_bus_median_short_connector
+                                ? "median_short_connector"
+                                : "short_connector"));
+
+
+                const auto effective_school_bus_extra_penalty = school_bus_extra_penalty;
+
+                util::Log()
+                    << "SCHOOLBUS_TURNAROUND "
+                    << "kind=" << school_bus_turnaround_kind
+                    << " penalty=" << effective_school_bus_extra_penalty
+                    << " angle=" << turn_angle
+                    << " is_uturn=" << is_uturn
+                    << " incoming_len=" << incoming_edge_length
+                    << " outgoing_len=" << outgoing_edge_length
+
+                    << " incoming_priority=" << static_cast<int>(edge_data1.flags.road_classification.GetPriority())
+                    << " outgoing_priority=" << static_cast<int>(edge_data2.flags.road_classification.GetPriority())
+                    << " incoming_is_link=" << incoming_is_link
+                    << " outgoing_is_link=" << outgoing_is_link
+
+                    << " from_very_short_edge=" << from_very_short_edge
+                    << " is_turning_after_short_edge=" << is_turning_after_short_edge
+                    << " is_connector_turn_angle=" << is_connector_turn_angle
+                    << " is_connector_scale=" << is_connector_scale
+                    << " is_school_bus_short_connector=" << is_school_bus_short_connector
+                    << " is_school_bus_median_short_connector=" << is_school_bus_median_short_connector
+                    << " is_school_bus_same_road_opposite_uturn=" << is_school_bus_same_road_opposite_uturn
+                    << " is_school_bus_local_sharp_turnaround=" << is_school_bus_local_sharp_turnaround
+                    << " via_lon=" << via_lon
+                    << " via_lat=" << via_lat
+                    << " from_node=" << node_along_road_entering
+                    << " via_node=" << intersection_node
+                    << " to_node=" << node_along_road_exiting
+                    << " from_edge=" << node_based_edge_from
+                    << " to_edge=" << node_based_edge_to;
+
+                const auto add_turn_penalty_safely = [](TurnPenalty original, std::int16_t extra) {
+                    using Value = TurnPenalty::value_type;
+
+                    const int original_value = static_cast<int>(static_cast<Value>(original));
+                    const int extra_value = static_cast<int>(extra);
+
+                    const int min_value = static_cast<int>(std::numeric_limits<Value>::min());
+                    const int max_value = static_cast<int>(std::numeric_limits<Value>::max());
+
+                    const int clamped_value =
+                        std::clamp(original_value + extra_value, min_value, max_value);
+
+                    return TurnPenalty{static_cast<Value>(clamped_value)};
+                };
+
+                weight_penalty =
+                    add_turn_penalty_safely(weight_penalty, effective_school_bus_extra_penalty);
+                duration_penalty =
+                    add_turn_penalty_safely(duration_penalty, effective_school_bus_extra_penalty);
+            }
+
+
+
 
             BOOST_ASSERT(SPECIAL_NODEID != nbe_to_ebn_mapping[node_based_edge_from]);
             BOOST_ASSERT(SPECIAL_NODEID != nbe_to_ebn_mapping[node_based_edge_to]);
