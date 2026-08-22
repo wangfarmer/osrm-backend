@@ -642,6 +642,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
             const auto &edge_data1 = m_node_based_graph.GetEdgeData(node_based_edge_from);
             const auto &edge_data2 = m_node_based_graph.GetEdgeData(node_based_edge_to);
 
+            const NodeID node_along_road_exiting = m_node_based_graph.GetTarget(node_based_edge_to);
+
             BOOST_ASSERT(nbe_to_ebn_mapping[node_based_edge_from] !=
                          nbe_to_ebn_mapping[node_based_edge_to]);
             BOOST_ASSERT(!edge_data1.reversed);
@@ -716,7 +718,7 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
 
 
             const auto add_turn_penalty_safely = [](TurnPenalty original, std::int16_t extra) {
-                using Value = TurnPenalty::value_type;
+                using Value = TurnPenalty;
 
                 const int original_value = static_cast<int>(static_cast<Value>(original));
                 const int extra_value = static_cast<int>(extra);
@@ -755,8 +757,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
             const auto lon_alias = util::toFloating(coordinate.lon);
             const auto lat_alias = util::toFloating(coordinate.lat);
             return std::pair<double, double>{
-                from_alias<double>(lon_alias),
-                from_alias<double>(lat_alias)};
+                static_cast<double>(lon_alias),
+                static_cast<double>(lat_alias)};
         };
 
         const auto [from_lon, from_lat] = get_debug_lon_lat(node_along_road_entering);
@@ -1021,8 +1023,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                 const auto lat_alias = util::toFloating(coordinate.lat);
 
                 return std::pair<double, double>{
-                    from_alias<double>(lon_alias),
-                    from_alias<double>(lat_alias)};
+                    static_cast<double>(lon_alias),
+                    static_cast<double>(lat_alias)};
             };
 
             const auto heading_degrees = [&](const NodeID from, const NodeID to) {
@@ -1126,14 +1128,14 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
 
 
                     const bool incoming_named =
-                        incoming_annotation.string_view_id != EMPTY_STRINGVIEWID;
+                        incoming_annotation.name_id != EMPTY_NAMEID;
 
                     const bool exit_named =
-                        exit_annotation.string_view_id != EMPTY_STRINGVIEWID;
+                        exit_annotation.name_id != EMPTY_NAMEID;
 
                     const bool both_named_same =
                         incoming_named &&
-                        incoming_annotation.string_view_id == exit_annotation.string_view_id;
+                        incoming_annotation.name_id == exit_annotation.name_id;
 
                     const bool named_to_empty =
                         incoming_named && !exit_named;
@@ -1158,8 +1160,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                     const auto debug_via_lon_alias = util::toFloating(debug_via_coordinate.lon);
                     const auto debug_via_lat_alias = util::toFloating(debug_via_coordinate.lat);
 
-                    const double debug_via_lon = from_alias<double>(debug_via_lon_alias);
-                    const double debug_via_lat = from_alias<double>(debug_via_lat_alias);
+                    const double debug_via_lon = static_cast<double>(debug_via_lon_alias);
+                    const double debug_via_lat = static_cast<double>(debug_via_lat_alias);
 
                     const bool is_flamingo_debug =
                         debug_via_lon > -115.2325 && debug_via_lon < -115.2305 &&
@@ -1177,8 +1179,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                             << " heading_in=" << incoming_heading
                             << " heading_out=" << exit_heading
                             << " heading_diff=" << heading_diff
-                            << " incoming_string_view_id=" << incoming_annotation.string_view_id
-                            << " exit_string_view_id=" << exit_annotation.string_view_id
+                            << " incoming_name_id=" << incoming_annotation.name_id
+                            << " exit_name_id=" << exit_annotation.name_id
                             << " via_lon=" << debug_via_lon
                             << " via_lat=" << debug_via_lat
                             << " from_node=" << node_along_road_entering
@@ -1205,8 +1207,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                         const auto via_lon_alias = util::toFloating(via_coordinate.lon);
                         const auto via_lat_alias = util::toFloating(via_coordinate.lat);
 
-                        const double via_lon = from_alias<double>(via_lon_alias);
-                        const double via_lat = from_alias<double>(via_lat_alias);
+                        const double via_lon = static_cast<double>(via_lon_alias);
+                        const double via_lat = static_cast<double>(via_lat_alias);
 
                         util::Log()
                             << "SCHOOLBUS_SAME_ROAD_OPPOSITE_UTURN "
@@ -1217,7 +1219,7 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                             << " heading_in=" << incoming_heading
                             << " heading_out=" << exit_heading
                             << " heading_diff=" << heading_diff
-                            << " string_view_id=" << incoming_annotation.string_view_id
+                            << " name_id=" << incoming_annotation.name_id
                             << " via_lon=" << via_lon
                             << " via_lat=" << via_lat
                             << " from_node=" << node_along_road_entering
@@ -1240,8 +1242,8 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
             const auto debug_lon_alias = util::toFloating(debug_coordinate.lon);
             const auto debug_lat_alias = util::toFloating(debug_coordinate.lat);
 
-            const double debug_lon = from_alias<double>(debug_lon_alias);
-            const double debug_lat = from_alias<double>(debug_lat_alias);
+            const double debug_lon = static_cast<double>(debug_lon_alias);
+            const double debug_lat = static_cast<double>(debug_lat_alias);
 
             const bool is_flamingo_third_debug =
                 debug_lon > -115.2320 && debug_lon < -115.2305 &&
@@ -1458,7 +1460,7 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                     << " to_edge=" << node_based_edge_to;
 
                 const auto add_turn_penalty_safely = [](TurnPenalty original, std::int16_t extra) {
-                    using Value = TurnPenalty::value_type;
+                    using Value = TurnPenalty;
 
                     const int original_value = static_cast<int>(static_cast<Value>(original));
                     const int extra_value = static_cast<int>(extra);
