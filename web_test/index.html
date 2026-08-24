@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>OSRM School Bus U-turn Test</title>
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"
+  />
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: Arial, sans-serif;
+    }
+
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+
+    #panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: white;
+      padding: 12px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      width: 360px;
+      font-size: 14px;
+    }
+
+    #status {
+      margin-top: 8px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+
+<body>
+<div id="panel">
+  <strong>OSRM School Bus U-turn Test</strong>
+  <div id="status">Loading...</div>
+</div>
+
+<div id="map"></div>
+
+<script>
+
+//  const end = [-115.226302, 36.114657];
+//  const start = [-115.226302, 36.114376];
+
+// const start = [-115.226302, 36.114657];
+// const end = [-115.226302, 36.114376];
+
+//const end = [-115.110725, 35.976875];
+//const start = [-115.116992, 35.979426];
+
+// const start = [-115.100500,35.929460];
+// const end = [-115.098727,35.928714];
+
+//case7 36.107486, -115.29818
+//const start = [-115.295340, 36.107751];
+//const end = [-115.294305, 36.106644];
+
+// const start = [-115.296735, 36.107518];
+// const end = [-115.296727, 36.107411];
+
+// const start = [-115.296988, 36.108235];
+// const end = [-115.297322, 36.108270];
+
+//const start = [-115.071983, 36.166547];
+//const end = [-115.071969, 36.166267];
+
+// const start = [-115.327699, 36.288094];
+// const end = [-115.327726, 36.288365];
+
+//case10
+// const start = [-115.171575, 36.144455];
+// const end = [-115.173286, 36.142927];
+
+const start = [-115.172776, 36.145937];
+const end = [-115.173334, 36.145274]
+//[-115.173557, 36.145836];
+
+// const start = [-115.172976, 36.145282];
+// const end = [-115.173334, 36.145274];
+
+//const start = [-115.305062, 36.306474]; 
+//const end = [-115.305094, 36.306898]; 
+
+//const start = [-115.197985, 35.988359];
+//const end = [-115.198231, 35.988064];
+
+//const start = [-115.306030, 36.307496]; 
+//const end = [-115.306638, 36.306863]; 
+
+//const start = [-115.264978, 36.061211];
+//const end = [-115.263543, 36.060974];
+
+//const start = [-115.189008, 36.013808]
+//const end = [-115.184083, 36.012792];
+
+//const start = [-115.201751, 35.989359];
+//const end = [-115.200877, 35.989106];
+
+//const start = [-115.318094, 36.326165];
+//const end = [-115.309514, 36.323660];
+
+//const start = [-115.264978, 36.061211];
+//const end = [-115.263543, 36.060974];
+
+
+const map = L.map("map").setView([36.11735, -115.17300], 18);
+
+L.tileLayer(
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19
+  }
+).addTo(map);
+
+L.marker([start[1], start[0]])
+  .addTo(map)
+  .bindPopup("Start");
+
+L.marker([end[1], end[0]])
+  .addTo(map)
+  .bindPopup("End");
+//`${start[0]},${start[1]};${mid1[0]},${mid1[1]};${mid2[0]},${mid2[1]};${end[0]},${end[1]}` +
+async function loadRoute() {
+  const url =
+    "/osrm/route/v1/driving/" +
+    `${start[0]},${start[1]};${end[0]},${end[1]}` +
+    "?steps=true&geometries=geojson&overview=full";
+
+  const response = await fetch(url);
+  const data = await response.json();
+
+  console.log(data);
+
+  if (data.code !== "Ok") {
+    document.getElementById("status").innerText =
+      "OSRM error: " + JSON.stringify(data, null, 2);
+    return;
+  }
+
+  const route = data.routes[0];
+
+  L.geoJSON(route.geometry, {
+    weight: 6
+  }).addTo(map);
+
+  const bounds = L.geoJSON(route.geometry).getBounds();
+  map.fitBounds(bounds, { padding: [40, 40] });
+
+  let uturns = [];
+
+  route.legs.forEach((leg) => {
+    leg.steps.forEach((step) => {
+      const maneuver = step.maneuver;
+
+      if (maneuver && maneuver.modifier === "uturn") {
+        uturns.push({
+          location: maneuver.location,
+          name: step.name,
+          type: maneuver.type,
+          modifier: maneuver.modifier
+        });
+
+        L.circleMarker(
+          [maneuver.location[1], maneuver.location[0]],
+          {
+            radius: 10,
+            weight: 3
+          }
+        )
+        .addTo(map)
+        .bindPopup(
+          "U-turn detected<br>" +
+          "Road: " + step.name + "<br>" +
+          "Type: " + maneuver.type + "<br>" +
+          "Modifier: " + maneuver.modifier
+        );
+      }
+    });
+  });
+
+  document.getElementById("status").innerText =
+    `Distance: ${route.distance.toFixed(1)} m\n` +
+    `Duration: ${route.duration.toFixed(1)} s\n` +
+    `U-turn count: ${uturns.length}\n\n` +
+    uturns.map((u, i) =>
+      `#${i + 1}: ${u.name || "(unnamed road)"} at ${u.location[0]}, ${u.location[1]}`
+    ).join("\n");
+}
+
+loadRoute();
+</script>
+</body>
+</html>

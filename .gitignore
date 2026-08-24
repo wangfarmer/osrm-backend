@@ -105,3 +105,10 @@ debug.lua
 
 # node-osrm artifacts
 lib/binding
+
+# EzRouting Ubuntu 20 local build/runtime artifacts
+/build-gpp93/
+/build-node-gpp93/
+/node_modules/
+/data/**/*.osm.pbf
+/data/**/*.osrm*

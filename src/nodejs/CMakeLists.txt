@@ -17,9 +17,17 @@ add_nodejs_module(node_osrm node_osrm.cpp)
 set_target_properties(node_osrm PROPERTIES CXX_STANDARD 17)
 # TODO: we disable clang-tidy for this target, because it causes errors in third-party NodeJs related headers
 set_target_properties(node_osrm PROPERTIES CXX_CLANG_TIDY "")
-# TODO: we turn off some warnings for this target, because it causes errors in third-party NodeJs related headers
-target_no_warning(node_osrm suggest-destructor-override)
+# Node/NAN headers trigger warnings that are not relevant to OSRM itself.
+# suggest-destructor-override is not supported by GCC 9.3.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_no_warning(node_osrm suggest-destructor-override)
+endif()
+
+# Supported by GCC 9.3 and needed because NAN triggers -Wsuggest-override.
 target_no_warning(node_osrm suggest-override)
+
+# NAN used by OSRM v5.27.1 triggers pedantic warnings under GCC 9.3.
+target_compile_options(node_osrm PRIVATE -Wno-pedantic)
 
 target_link_libraries(node_osrm osrm)
 
