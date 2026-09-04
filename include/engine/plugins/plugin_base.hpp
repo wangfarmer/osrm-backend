@@ -1,6 +1,7 @@
 #ifndef BASE_PLUGIN_HPP
 #define BASE_PLUGIN_HPP
 
+#include "engine/access_point_index.hpp"
 #include "engine/api/base_parameters.hpp"
 #include "engine/api/base_result.hpp"
 #include "engine/api/flatbuffers/fbresult_generated.h"
@@ -17,7 +18,9 @@
 #include <algorithm>
 #include <cctype>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <util/log.hpp>
@@ -32,6 +35,13 @@ namespace plugins
 class BasePlugin
 {
   protected:
+    explicit BasePlugin(std::shared_ptr<const AccessPointIndex> access_point_index_ = nullptr)
+        : access_point_index(std::move(access_point_index_))
+    {
+    }
+
+    const std::shared_ptr<const AccessPointIndex> access_point_index;
+
     bool CheckAllCoordinates(const std::vector<util::Coordinate> &coordinates) const
     {
         return !std::any_of(
@@ -177,31 +187,25 @@ class BasePlugin
         {
             if (std::isalnum(character))
             {
-                normalized.push_back(
-                    static_cast<char>(std::tolower(character)));
+                normalized.push_back(static_cast<char>(std::tolower(character)));
             }
         }
 
         return normalized;
     }
 
-    std::string
-    GetPhantomStreetName(const datafacade::BaseDataFacade &facade,
-                         const PhantomNode &phantom) const
+    std::string GetPhantomStreetName(const datafacade::BaseDataFacade &facade,
+                                     const PhantomNode &phantom) const
     {
-        const auto segment_id =
-            phantom.forward_segment_id.enabled
-                ? phantom.forward_segment_id.id
-                : phantom.reverse_segment_id.id;
+        const auto segment_id = phantom.forward_segment_id.enabled ? phantom.forward_segment_id.id
+                                                                   : phantom.reverse_segment_id.id;
 
-        return std::string(
-            facade.GetNameForID(facade.GetNameIndex(segment_id)));
+        return std::string(facade.GetNameForID(facade.GetNameIndex(segment_id)));
     }
 
-    bool
-    PhantomMatchesStreet(const datafacade::BaseDataFacade &facade,
-                         const PhantomNode &phantom,
-                         const std::string &normalized_expected_street) const
+    bool PhantomMatchesStreet(const datafacade::BaseDataFacade &facade,
+                              const PhantomNode &phantom,
+                              const std::string &normalized_expected_street) const
     {
         return NormalizeStreetName(GetPhantomStreetName(facade, phantom)) ==
                normalized_expected_street;
@@ -249,6 +253,81 @@ class BasePlugin
         return phantom_nodes;
     }
 
+    std::vector<PhantomNodeWithDistance>
+    GetNearestPhantomNodesWithAccessPoint(const datafacade::BaseDataFacade &facade,
+                                          const api::BaseParameters &parameters,
+                                          const std::size_t coordinate_index,
+                                          const std::size_t number_of_results,
+                                          const bool use_radiuses,
+                                          const bool use_bearings,
+                                          const engine::Approach approach) const
+    {
+        auto default_candidates = facade.NearestPhantomNodes(
+            parameters.coordinates[coordinate_index],
+            number_of_results,
+            use_radiuses ? parameters.radiuses[coordinate_index] : boost::none,
+            use_bearings ? parameters.bearings[coordinate_index] : boost::none,
+            approach);
+
+        constexpr double minimum_default_snap_distance = 15.0;
+        constexpr double maximum_approach_distance = 40.0;
+        constexpr double maximum_access_snap_distance = 3.0;
+
+        const bool default_snap_is_far =
+            default_candidates.empty() ||
+            std::all_of(default_candidates.begin(),
+                        default_candidates.end(),
+                        [](const PhantomNodeWithDistance &candidate) {
+                            return candidate.distance > minimum_default_snap_distance;
+                        });
+
+        if (!access_point_index || !access_point_index->IsLoaded() || !default_snap_is_far)
+        {
+            return default_candidates;
+        }
+
+        const auto access_match = access_point_index->FindNearest(
+            parameters.coordinates[coordinate_index], maximum_approach_distance);
+
+        if (!access_match)
+        {
+            return default_candidates;
+        }
+
+        auto access_candidates = facade.NearestPhantomNodes(
+            access_match->access_coordinate,
+            number_of_results,
+            boost::optional<double>{maximum_access_snap_distance},
+            use_bearings ? parameters.bearings[coordinate_index] : boost::none,
+            approach);
+
+        for (auto &candidate : access_candidates)
+        {
+            candidate.phantom_node.input_location = parameters.coordinates[coordinate_index];
+            candidate.distance = util::coordinate_calculation::greatCircleDistance(
+                parameters.coordinates[coordinate_index], candidate.phantom_node.location);
+        }
+
+        if (use_radiuses && parameters.radiuses[coordinate_index])
+        {
+            const auto requested_radius = parameters.radiuses[coordinate_index].get();
+            access_candidates.erase(
+                std::remove_if(access_candidates.begin(),
+                               access_candidates.end(),
+                               [requested_radius](const PhantomNodeWithDistance &candidate) {
+                                   return candidate.distance > requested_radius;
+                               }),
+                access_candidates.end());
+        }
+
+        if (access_candidates.empty())
+        {
+            return default_candidates;
+        }
+
+        return access_candidates;
+    }
+
     std::vector<std::vector<PhantomNodeWithDistance>>
     GetPhantomNodes(const datafacade::BaseDataFacade &facade,
                     const api::BaseParameters &parameters,
@@ -279,16 +358,12 @@ class BasePlugin
                 continue;
             }
 
-            
+            const auto approach = use_approaches && parameters.approaches[i]
+                                      ? parameters.approaches[i].get()
+                                      : engine::Approach::UNRESTRICTED;
 
-            const auto approach =
-                use_approaches && parameters.approaches[i]
-                    ? parameters.approaches[i].get()
-                    : engine::Approach::UNRESTRICTED;
-
-            const bool use_street_name =
-                use_street_names && parameters.street_names[i] &&
-                !parameters.street_names[i]->empty();
+            const bool use_street_name = use_street_names && parameters.street_names[i] &&
+                                         !parameters.street_names[i]->empty();
 
             if (use_street_name)
             {
@@ -299,60 +374,45 @@ class BasePlugin
                     search_radius = parameters.radiuses[i].get();
                 }
 
-                auto street_candidates =
-                    facade.NearestPhantomNodesInRange(
-                        parameters.coordinates[i],
-                        search_radius,
-                        use_bearings ? parameters.bearings[i] : boost::none,
-                        approach,
-                        false);
+                auto street_candidates = facade.NearestPhantomNodesInRange(
+                    parameters.coordinates[i],
+                    search_radius,
+                    use_bearings ? parameters.bearings[i] : boost::none,
+                    approach,
+                    false);
 
                 const auto normalized_expected_street =
                     NormalizeStreetName(parameters.street_names[i].get());
 
-                const auto matches_expected_street =
-                    [&](const PhantomNodeWithDistance &candidate)
-                {
+                const auto matches_expected_street = [&](const PhantomNodeWithDistance &candidate) {
                     return PhantomMatchesStreet(
-                        facade,
-                        candidate.phantom_node,
-                        normalized_expected_street);
+                        facade, candidate.phantom_node, normalized_expected_street);
                 };
 
-                const bool found_matching_street =
-                    std::any_of(street_candidates.begin(),
-                                street_candidates.end(),
-                                matches_expected_street);
+                const bool found_matching_street = std::any_of(
+                    street_candidates.begin(), street_candidates.end(), matches_expected_street);
 
                 if (found_matching_street)
                 {
-                    const auto candidate_distance =
-                        [&](const PhantomNodeWithDistance &candidate)
-                    {
+                    const auto candidate_distance = [&](const PhantomNodeWithDistance &candidate) {
                         return util::coordinate_calculation::greatCircleDistance(
-                            parameters.coordinates[i],
-                            candidate.phantom_node.location);
+                            parameters.coordinates[i], candidate.phantom_node.location);
                     };
 
-                    std::stable_sort(
-                        street_candidates.begin(),
-                        street_candidates.end(),
-                        [&](const PhantomNodeWithDistance &lhs,
-                            const PhantomNodeWithDistance &rhs)
-                        {
-                            const bool lhs_matches =
-                                matches_expected_street(lhs);
-                            const bool rhs_matches =
-                                matches_expected_street(rhs);
+                    std::stable_sort(street_candidates.begin(),
+                                     street_candidates.end(),
+                                     [&](const PhantomNodeWithDistance &lhs,
+                                         const PhantomNodeWithDistance &rhs) {
+                                         const bool lhs_matches = matches_expected_street(lhs);
+                                         const bool rhs_matches = matches_expected_street(rhs);
 
-                            if (lhs_matches != rhs_matches)
-                            {
-                                return lhs_matches;
-                            }
+                                         if (lhs_matches != rhs_matches)
+                                         {
+                                             return lhs_matches;
+                                         }
 
-                            return candidate_distance(lhs) <
-                                   candidate_distance(rhs);
-                        });
+                                         return candidate_distance(lhs) < candidate_distance(rhs);
+                                     });
 
                     if (street_candidates.size() > number_of_results)
                     {
@@ -363,22 +423,19 @@ class BasePlugin
                 }
                 else
                 {
-                    phantom_nodes[i] = facade.NearestPhantomNodes(
-                        parameters.coordinates[i],
-                        number_of_results,
-                        use_radiuses ? parameters.radiuses[i] : boost::none,
-                        use_bearings ? parameters.bearings[i] : boost::none,
-                        approach);
+                    phantom_nodes[i] = GetNearestPhantomNodesWithAccessPoint(facade,
+                                                                             parameters,
+                                                                             i,
+                                                                             number_of_results,
+                                                                             use_radiuses,
+                                                                             use_bearings,
+                                                                             approach);
                 }
             }
             else
             {
-                phantom_nodes[i] = facade.NearestPhantomNodes(
-                    parameters.coordinates[i],
-                    number_of_results,
-                    use_radiuses ? parameters.radiuses[i] : boost::none,
-                    use_bearings ? parameters.bearings[i] : boost::none,
-                    approach);
+                phantom_nodes[i] = GetNearestPhantomNodesWithAccessPoint(
+                    facade, parameters, i, number_of_results, use_radiuses, use_bearings, approach);
             }
 
             // we didn't find a fitting node, return error
@@ -417,14 +474,12 @@ class BasePlugin
                 continue;
             }
 
-            const auto approach =
-                use_approaches && parameters.approaches[i]
-                    ? parameters.approaches[i].get()
-                    : engine::Approach::UNRESTRICTED;
+            const auto approach = use_approaches && parameters.approaches[i]
+                                      ? parameters.approaches[i].get()
+                                      : engine::Approach::UNRESTRICTED;
 
-            const bool use_street_name =
-                use_street_names && parameters.street_names[i] &&
-                !parameters.street_names[i]->empty();
+            const bool use_street_name = use_street_names && parameters.street_names[i] &&
+                                         !parameters.street_names[i]->empty();
 
             bool selected_street_candidate = false;
 
@@ -437,13 +492,12 @@ class BasePlugin
                     search_radius = parameters.radiuses[i].get();
                 }
 
-                const auto street_candidates =
-                    facade.NearestPhantomNodesInRange(
-                        parameters.coordinates[i],
-                        search_radius,
-                        use_bearings ? parameters.bearings[i] : boost::none,
-                        approach,
-                        use_all_edges);
+                const auto street_candidates = facade.NearestPhantomNodesInRange(
+                    parameters.coordinates[i],
+                    search_radius,
+                    use_bearings ? parameters.bearings[i] : boost::none,
+                    approach,
+                    use_all_edges);
 
                 const auto normalized_expected_street =
                     NormalizeStreetName(parameters.street_names[i].get());
@@ -455,9 +509,7 @@ class BasePlugin
                      ++candidate)
                 {
                     if (!PhantomMatchesStreet(
-                            facade,
-                            candidate->phantom_node,
-                            normalized_expected_street))
+                            facade, candidate->phantom_node, normalized_expected_street))
                     {
                         continue;
                     }
@@ -470,13 +522,10 @@ class BasePlugin
 
                     const auto candidate_distance =
                         util::coordinate_calculation::greatCircleDistance(
-                            parameters.coordinates[i],
-                            candidate->phantom_node.location);
+                            parameters.coordinates[i], candidate->phantom_node.location);
 
-                    const auto best_distance =
-                        util::coordinate_calculation::greatCircleDistance(
-                            parameters.coordinates[i],
-                            best_match->phantom_node.location);
+                    const auto best_distance = util::coordinate_calculation::greatCircleDistance(
+                        parameters.coordinates[i], best_match->phantom_node.location);
 
                     if (candidate_distance < best_distance)
                     {
@@ -486,37 +535,100 @@ class BasePlugin
 
                 if (best_match != street_candidates.end())
                 {
-                    const auto selected_location =
-                        best_match->phantom_node.location;
+                    const auto selected_location = best_match->phantom_node.location;
 
                     for (const auto &candidate : street_candidates)
                     {
-                        if (candidate.phantom_node.location ==
-                                selected_location &&
+                        if (candidate.phantom_node.location == selected_location &&
                             PhantomMatchesStreet(
-                                facade,
-                                candidate.phantom_node,
-                                normalized_expected_street))
+                                facade, candidate.phantom_node, normalized_expected_street))
                         {
-                            alternatives[i].first.push_back(
-                                candidate.phantom_node);
+                            alternatives[i].first.push_back(candidate.phantom_node);
                         }
                     }
 
-                    selected_street_candidate =
-                        !alternatives[i].first.empty();
+                    selected_street_candidate = !alternatives[i].first.empty();
                 }
             }
 
             if (!selected_street_candidate)
             {
-                alternatives[i] =
-                    facade.NearestCandidatesWithAlternativeFromBigComponent(
-                        parameters.coordinates[i],
-                        use_radiuses ? parameters.radiuses[i] : boost::none,
-                        use_bearings ? parameters.bearings[i] : boost::none,
-                        approach,
-                        use_all_edges);
+                // First run normal OSRM snapping.
+                alternatives[i] = facade.NearestCandidatesWithAlternativeFromBigComponent(
+                    parameters.coordinates[i],
+                    use_radiuses ? parameters.radiuses[i] : boost::none,
+                    use_bearings ? parameters.bearings[i] : boost::none,
+                    approach,
+                    use_all_edges);
+
+                constexpr double minimum_default_snap_distance = 15.0;
+                constexpr double maximum_approach_distance = 40.0;
+                constexpr double maximum_access_snap_distance = 3.0;
+
+                const auto candidate_is_close = [&](const PhantomNode &candidate) {
+                    return util::coordinate_calculation::greatCircleDistance(
+                               parameters.coordinates[i], candidate.location) <=
+                           minimum_default_snap_distance;
+                };
+
+                const bool default_has_close_candidate = std::any_of(alternatives[i].first.begin(),
+                                                                     alternatives[i].first.end(),
+                                                                     candidate_is_close) ||
+                                                         std::any_of(alternatives[i].second.begin(),
+                                                                     alternatives[i].second.end(),
+                                                                     candidate_is_close);
+
+                if (access_point_index && access_point_index->IsLoaded() &&
+                    !default_has_close_candidate)
+                {
+                    const auto access_match = access_point_index->FindNearest(
+                        parameters.coordinates[i], maximum_approach_distance);
+
+                    if (access_match)
+                    {
+                        auto access_alternatives =
+                            facade.NearestCandidatesWithAlternativeFromBigComponent(
+                                access_match->access_coordinate,
+                                boost::optional<double>{maximum_access_snap_distance},
+                                use_bearings ? parameters.bearings[i] : boost::none,
+                                approach,
+                                use_all_edges);
+
+                        const auto prepare_candidates = [&](PhantomNodeCandidates &candidates) {
+                            if (use_radiuses && parameters.radiuses[i])
+                            {
+                                const auto requested_radius = parameters.radiuses[i].get();
+
+                                candidates.erase(
+                                    std::remove_if(
+                                        candidates.begin(),
+                                        candidates.end(),
+                                        [&](const PhantomNode &candidate) {
+                                            const auto distance =
+                                                util::coordinate_calculation::greatCircleDistance(
+                                                    parameters.coordinates[i], candidate.location);
+
+                                            return distance > requested_radius;
+                                        }),
+                                    candidates.end());
+                            }
+
+                            for (auto &candidate : candidates)
+                            {
+                                candidate.input_location = parameters.coordinates[i];
+                            }
+                        };
+
+                        prepare_candidates(access_alternatives.first);
+
+                        prepare_candidates(access_alternatives.second);
+
+                        if (!access_alternatives.first.empty())
+                        {
+                            alternatives[i] = std::move(access_alternatives);
+                        }
+                    }
+                }
             }
 
             // we didn't find a fitting node, return error

@@ -29,12 +29,15 @@ class ViaRoutePlugin final : public BasePlugin
     const int max_alternatives;
 
   public:
-    explicit ViaRoutePlugin(int max_locations_viaroute, int max_alternatives);
+    explicit ViaRoutePlugin(int max_locations_viaroute,
+                            int max_alternatives,
+                            std::shared_ptr<const AccessPointIndex> access_point_index);
 
     Status HandleRequest(const RoutingAlgorithmsInterface &algorithms,
                          const api::RouteParameters &route_parameters,
                          osrm::engine::api::ResultT &json_result) const;
 };
+
 } // namespace plugins
 } // namespace engine
 } // namespace osrm

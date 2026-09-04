@@ -7,6 +7,8 @@
 #include <boost/assert.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
+#include <utility>
+
 namespace osrm
 {
 namespace engine
@@ -14,7 +16,11 @@ namespace engine
 namespace plugins
 {
 
-NearestPlugin::NearestPlugin(const int max_results_) : max_results{max_results_} {}
+NearestPlugin::NearestPlugin(const int max_results_,
+                             std::shared_ptr<const AccessPointIndex> access_point_index_)
+    : BasePlugin(std::move(access_point_index_)), max_results{max_results_}
+{
+}
 
 Status NearestPlugin::HandleRequest(const RoutingAlgorithmsInterface &algorithms,
                                     const api::NearestParameters &params,

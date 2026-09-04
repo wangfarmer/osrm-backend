@@ -34,83 +34,61 @@ class EngineInterface
   public:
     virtual ~EngineInterface() = default;
 
-    virtual Status Route(const api::RouteParameters &parameters,
-                         api::ResultT &result) const = 0;
+    virtual Status Route(const api::RouteParameters &parameters, api::ResultT &result) const = 0;
 
-    virtual Status Table(const api::TableParameters &parameters,
-                         api::ResultT &result) const = 0;
+    virtual Status Table(const api::TableParameters &parameters, api::ResultT &result) const = 0;
 
     virtual Status Nearest(const api::NearestParameters &parameters,
                            api::ResultT &result) const = 0;
 
-    virtual Status Trip(const api::TripParameters &parameters,
-                        api::ResultT &result) const = 0;
+    virtual Status Trip(const api::TripParameters &parameters, api::ResultT &result) const = 0;
 
-    virtual Status Match(const api::MatchParameters &parameters,
-                         api::ResultT &result) const = 0;
+    virtual Status Match(const api::MatchParameters &parameters, api::ResultT &result) const = 0;
 
-    virtual Status Tile(const api::TileParameters &parameters,
-                        api::ResultT &result) const = 0;
+    virtual Status Tile(const api::TileParameters &parameters, api::ResultT &result) const = 0;
 };
 
-template <typename Algorithm>
-class Engine final : public EngineInterface
+template <typename Algorithm> class Engine final : public EngineInterface
 {
   public:
     explicit Engine(const EngineConfig &config)
-        : access_point_index(
-              std::make_shared<const AccessPointIndex>(
-                  config.storage_config.base_path.empty()
-                      ? std::string()
-                      : config.storage_config.base_path.string() +
-                            ".osrm.access.csv")),
-          route_plugin(config.max_locations_viaroute,
-                       config.max_alternatives),
+        : access_point_index(std::make_shared<const AccessPointIndex>(
+              config.storage_config.base_path.empty()
+                  ? std::string()
+                  : config.storage_config.base_path.string() + ".osrm.access.csv")),
+          route_plugin(config.max_locations_viaroute, config.max_alternatives, access_point_index),
           table_plugin(config.max_locations_distance_table),
-          nearest_plugin(config.max_results_nearest),
+          nearest_plugin(config.max_results_nearest, access_point_index),
           trip_plugin(config.max_locations_trip),
-          match_plugin(config.max_locations_map_matching,
-                       config.max_radius_map_matching),
+          match_plugin(config.max_locations_map_matching, config.max_radius_map_matching),
           tile_plugin()
     {
         if (config.use_shared_memory)
         {
-            util::Log(logDEBUG)
-                << "Using shared memory with name \""
-                << config.dataset_name
-                << "\" with algorithm "
-                << routing_algorithms::name<Algorithm>();
+            util::Log(logDEBUG) << "Using shared memory with name \"" << config.dataset_name
+                                << "\" with algorithm " << routing_algorithms::name<Algorithm>();
 
-            facade_provider =
-                std::make_unique<WatchingProvider<Algorithm>>(
-                    config.dataset_name);
+            facade_provider = std::make_unique<WatchingProvider<Algorithm>>(config.dataset_name);
         }
         else if (!config.memory_file.empty() || config.use_mmap)
         {
             if (!config.memory_file.empty())
             {
-                util::Log(logWARNING)
-                    << "The 'memory_file' option is DEPRECATED - "
-                       "using direct mmaping instead";
+                util::Log(logWARNING) << "The 'memory_file' option is DEPRECATED - "
+                                         "using direct mmaping instead";
             }
 
-            util::Log(logDEBUG)
-                << "Using direct memory mapping with algorithm "
-                << routing_algorithms::name<Algorithm>();
+            util::Log(logDEBUG) << "Using direct memory mapping with algorithm "
+                                << routing_algorithms::name<Algorithm>();
 
-            facade_provider =
-                std::make_unique<ExternalProvider<Algorithm>>(
-                    config.storage_config);
+            facade_provider = std::make_unique<ExternalProvider<Algorithm>>(config.storage_config);
         }
         else
         {
-            util::Log(logDEBUG)
-                << "Using internal memory with algorithm "
-                << routing_algorithms::name<Algorithm>();
+            util::Log(logDEBUG) << "Using internal memory with algorithm "
+                                << routing_algorithms::name<Algorithm>();
 
-            facade_provider =
-                std::make_unique<ImmutableProvider<Algorithm>>(
-                    config.storage_config);
+            facade_provider = std::make_unique<ImmutableProvider<Algorithm>>(config.storage_config);
         }
     }
 
@@ -122,67 +100,40 @@ class Engine final : public EngineInterface
 
     virtual ~Engine() override = default;
 
-    Status Route(const api::RouteParameters &params,
-                 api::ResultT &result) const override final
+    Status Route(const api::RouteParameters &params, api::ResultT &result) const override final
     {
-        return route_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return route_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
-    Status Table(const api::TableParameters &params,
-                 api::ResultT &result) const override final
+    Status Table(const api::TableParameters &params, api::ResultT &result) const override final
     {
-        return table_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return table_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
-    Status Nearest(const api::NearestParameters &params,
-                   api::ResultT &result) const override final
+    Status Nearest(const api::NearestParameters &params, api::ResultT &result) const override final
     {
-        return nearest_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return nearest_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
-    Status Trip(const api::TripParameters &params,
-                api::ResultT &result) const override final
+    Status Trip(const api::TripParameters &params, api::ResultT &result) const override final
     {
-        return trip_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return trip_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
-    Status Match(const api::MatchParameters &params,
-                 api::ResultT &result) const override final
+    Status Match(const api::MatchParameters &params, api::ResultT &result) const override final
     {
-        return match_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return match_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
-    Status Tile(const api::TileParameters &params,
-                api::ResultT &result) const override final
+    Status Tile(const api::TileParameters &params, api::ResultT &result) const override final
     {
-        return tile_plugin.HandleRequest(
-            GetAlgorithms(params),
-            params,
-            result);
+        return tile_plugin.HandleRequest(GetAlgorithms(params), params, result);
     }
 
   private:
-    template <typename ParametersT>
-    auto GetAlgorithms(const ParametersT &params) const
+    template <typename ParametersT> auto GetAlgorithms(const ParametersT &params) const
     {
-        return RoutingAlgorithms<Algorithm>{
-            heaps,
-            facade_provider->Get(params)};
+        return RoutingAlgorithms<Algorithm>{heaps, facade_provider->Get(params)};
     }
 
     std::shared_ptr<const AccessPointIndex> access_point_index;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace osrm
@@ -19,8 +20,11 @@ namespace engine
 namespace plugins
 {
 
-ViaRoutePlugin::ViaRoutePlugin(int max_locations_viaroute, int max_alternatives)
-    : max_locations_viaroute(max_locations_viaroute), max_alternatives(max_alternatives)
+ViaRoutePlugin::ViaRoutePlugin(int max_locations_viaroute,
+                               int max_alternatives,
+                               std::shared_ptr<const AccessPointIndex> access_point_index_)
+    : BasePlugin(std::move(access_point_index_)), max_locations_viaroute(max_locations_viaroute),
+      max_alternatives(max_alternatives)
 {
 }
 

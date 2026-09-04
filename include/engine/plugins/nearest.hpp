@@ -7,6 +7,8 @@
 #include "engine/routing_algorithms.hpp"
 #include "osrm/json_container.hpp"
 
+#include <memory>
+
 namespace osrm
 {
 namespace engine
@@ -17,7 +19,8 @@ namespace plugins
 class NearestPlugin final : public BasePlugin
 {
   public:
-    explicit NearestPlugin(const int max_results);
+    explicit NearestPlugin(int max_results,
+                           std::shared_ptr<const AccessPointIndex> access_point_index);
 
     Status HandleRequest(const RoutingAlgorithmsInterface &algorithms,
                          const api::NearestParameters &params,
@@ -26,6 +29,7 @@ class NearestPlugin final : public BasePlugin
   private:
     const int max_results;
 };
+
 } // namespace plugins
 } // namespace engine
 } // namespace osrm
