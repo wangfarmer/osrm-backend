@@ -35,6 +35,30 @@ class BaseAPI
     {
     }
 
+    std::string
+    MakeWaypointName(const PhantomNodeCandidates &candidates) const
+    {
+        std::vector<std::string> names;
+        names.reserve(candidates.size());
+
+        for (const auto &phantom : candidates)
+        {
+            const auto name =
+                facade.GetNameForID(
+                    facade.GetNameIndex(phantom.forward_segment_id.id))
+                    .to_string();
+
+            if (!name.empty() &&
+                std::find(names.begin(), names.end(), name) == names.end())
+            {
+                names.push_back(name);
+            }
+        }
+
+        return boost::algorithm::join(names, INTERSECTION_DELIMITER);
+    }
+
+
     util::json::Array
     MakeWaypoints(const std::vector<PhantomNodeCandidates> &waypoint_candidates) const
     {
@@ -55,18 +79,7 @@ class BaseAPI
     // protected:
     util::json::Object MakeWaypoint(const PhantomNodeCandidates &candidates) const
     {
-        // TODO: check forward/reverse
-        const auto toName = [this](const auto &phantom) {
-            return facade.GetNameForID(facade.GetNameIndex(phantom.forward_segment_id.id))
-                .to_string();
-        };
-        const auto noEmpty = [](const auto &name) { return !name.empty(); };
-
-        // At an intersection we may have multiple phantom node candidates.
-        // Combine them to represent the waypoint name.
-        std::string waypoint_name = boost::algorithm::join(
-            candidates | boost::adaptors::transformed(toName) | boost::adaptors::filtered(noEmpty),
-            INTERSECTION_DELIMITER);
+        const auto waypoint_name = MakeWaypointName(candidates);
 
         const auto &snapped_location = candidatesSnappedLocation(candidates);
         const auto &input_location = candidatesInputLocation(candidates);
@@ -127,17 +140,7 @@ class BaseAPI
             static_cast<float>(static_cast<double>(util::toFloating(snapped_location.lon))),
             static_cast<float>(static_cast<double>(util::toFloating(snapped_location.lat))));
 
-        const auto toName = [this](const auto &phantom) {
-            return facade.GetNameForID(facade.GetNameIndex(phantom.forward_segment_id.id))
-                .to_string();
-        };
-        const auto noEmpty = [](const auto &name) { return !name.empty(); };
-
-        // At an intersection we may have multiple phantom node candidates.
-        // Combine them to represent the waypoint name.
-        std::string waypoint_name = boost::algorithm::join(
-            candidates | boost::adaptors::transformed(toName) | boost::adaptors::filtered(noEmpty),
-            INTERSECTION_DELIMITER);
+        const auto waypoint_name = MakeWaypointName(candidates);
         auto name_string = builder->CreateString(waypoint_name);
 
         flatbuffers::Offset<flatbuffers::String> hint_string;
