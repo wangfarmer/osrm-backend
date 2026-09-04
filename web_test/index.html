@@ -85,8 +85,8 @@
 // const start = [-115.171575, 36.144455];
 // const end = [-115.173286, 36.142927];
 
-const start = [-115.172776, 36.145937];
-const end = [-115.173334, 36.145274]
+//const start = [-115.172776, 36.145937];
+//const end = [-115.173334, 36.145274]
 //[-115.173557, 36.145836];
 
 // const start = [-115.172976, 36.145282];
@@ -115,9 +115,10 @@ const end = [-115.173334, 36.145274]
 
 //const start = [-115.264978, 36.061211];
 //const end = [-115.263543, 36.060974];
+const start = [-77.63219780265017, 38.80101579506264];
+const end = [-77.636930, 38.804120];
 
-
-const map = L.map("map").setView([36.11735, -115.17300], 18);
+const map = L.map("map").setView([38.8025, -77.6345], 17);
 
 L.tileLayer(
   "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -137,9 +138,10 @@ L.marker([end[1], end[0]])
 //`${start[0]},${start[1]};${mid1[0]},${mid1[1]};${mid2[0]},${mid2[1]};${end[0]},${end[1]}` +
 async function loadRoute() {
   const url =
-    "/osrm/route/v1/driving/" +
-    `${start[0]},${start[1]};${end[0]},${end[1]}` +
-    "?steps=true&geometries=geojson&overview=full";
+  "/osrm/route/v1/driving/" +
+  `${start[0]},${start[1]};${end[0]},${end[1]}` +
+  "?steps=true&geometries=geojson&overview=full" +
+  "&street_names=Early_Marker_Court;Gaffney_Circle";
 
   const response = await fetch(url);
   const data = await response.json();
