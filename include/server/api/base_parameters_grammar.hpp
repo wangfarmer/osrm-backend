@@ -176,6 +176,10 @@ struct BaseParametersGrammar : boost::spirit::qi::grammar<Iterator, Signature>
                         (-approach_type %
                          ';')[ph::bind(&engine::api::BaseParameters::approaches, qi::_r1) = qi::_1];
 
+        street_names_rule = qi::lit("street_names=") >
+                        (-(qi::as_string[+(qi::char_ - ';' - '&')]) %
+                        ';')[ph::bind(&engine::api::BaseParameters::street_names, qi::_r1) = qi::_1];
+
         snapping_type.add("default", engine::api::BaseParameters::SnappingType::Default)(
             "any", engine::api::BaseParameters::SnappingType::Any);
 
@@ -199,6 +203,7 @@ struct BaseParametersGrammar : boost::spirit::qi::grammar<Iterator, Signature>
                     | generate_hints_rule(qi::_r1) //
                     | skip_waypoints_rule(qi::_r1) //
                     | approach_rule(qi::_r1)       //
+                    | street_names_rule(qi::_r1)   //
                     | exclude_rule(qi::_r1)        //
                     | snapping_rule(qi::_r1);
     }
@@ -220,7 +225,9 @@ struct BaseParametersGrammar : boost::spirit::qi::grammar<Iterator, Signature>
     qi::rule<Iterator, Signature> generate_hints_rule;
     qi::rule<Iterator, Signature> skip_waypoints_rule;
     qi::rule<Iterator, Signature> approach_rule;
+    qi::rule<Iterator, Signature> street_names_rule;
     qi::rule<Iterator, Signature> exclude_rule;
+    
 
     qi::rule<Iterator, osrm::engine::Bearing()> bearing_rule;
     qi::rule<Iterator, osrm::util::Coordinate()> location_rule;

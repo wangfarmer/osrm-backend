@@ -81,6 +81,7 @@ struct BaseParameters
     std::vector<boost::optional<double>> radiuses;
     std::vector<boost::optional<Bearing>> bearings;
     std::vector<boost::optional<Approach>> approaches;
+    std::vector<boost::optional<std::string>> street_names;
     std::vector<std::string> exclude;
     boost::optional<OutputFormatType> format = OutputFormatType::JSON;
 
@@ -113,6 +114,7 @@ struct BaseParameters
                (bearings.empty() || bearings.size() == coordinates.size()) &&
                (radiuses.empty() || radiuses.size() == coordinates.size()) &&
                (approaches.empty() || approaches.size() == coordinates.size()) &&
+               (street_names.empty() || street_names.size() == coordinates.size()) &&
                std::all_of(bearings.begin(),
                            bearings.end(),
                            [](const boost::optional<Bearing> &bearing_and_range) {
