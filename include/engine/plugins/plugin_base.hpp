@@ -401,6 +401,7 @@ class BasePlugin
         const bool use_radiuses = !parameters.radiuses.empty();
         const bool use_approaches = !parameters.approaches.empty();
         const bool use_all_edges = parameters.snapping == api::BaseParameters::SnappingType::Any;
+        const bool use_street_names = !parameters.street_names.empty();
 
         BOOST_ASSERT(parameters.IsValid());
         for (const auto i : util::irange<std::size_t>(0UL, parameters.coordinates.size()))
@@ -416,13 +417,107 @@ class BasePlugin
                 continue;
             }
 
-            alternatives[i] = facade.NearestCandidatesWithAlternativeFromBigComponent(
-                parameters.coordinates[i],
-                use_radiuses ? parameters.radiuses[i] : boost::none,
-                use_bearings ? parameters.bearings[i] : boost::none,
-                use_approaches && parameters.approaches[i] ? parameters.approaches[i].get()
-                                                           : engine::Approach::UNRESTRICTED,
-                use_all_edges);
+            const auto approach =
+                use_approaches && parameters.approaches[i]
+                    ? parameters.approaches[i].get()
+                    : engine::Approach::UNRESTRICTED;
+
+            const bool use_street_name =
+                use_street_names && parameters.street_names[i] &&
+                !parameters.street_names[i]->empty();
+
+            bool selected_street_candidate = false;
+
+            if (use_street_name)
+            {
+                double search_radius = 200.0;
+
+                if (use_radiuses && parameters.radiuses[i])
+                {
+                    search_radius = parameters.radiuses[i].get();
+                }
+
+                const auto street_candidates =
+                    facade.NearestPhantomNodesInRange(
+                        parameters.coordinates[i],
+                        search_radius,
+                        use_bearings ? parameters.bearings[i] : boost::none,
+                        approach,
+                        use_all_edges);
+
+                const auto normalized_expected_street =
+                    NormalizeStreetName(parameters.street_names[i].get());
+
+                auto best_match = street_candidates.end();
+
+                for (auto candidate = street_candidates.begin();
+                     candidate != street_candidates.end();
+                     ++candidate)
+                {
+                    if (!PhantomMatchesStreet(
+                            facade,
+                            candidate->phantom_node,
+                            normalized_expected_street))
+                    {
+                        continue;
+                    }
+
+                    if (best_match == street_candidates.end())
+                    {
+                        best_match = candidate;
+                        continue;
+                    }
+
+                    const auto candidate_distance =
+                        util::coordinate_calculation::greatCircleDistance(
+                            parameters.coordinates[i],
+                            candidate->phantom_node.location);
+
+                    const auto best_distance =
+                        util::coordinate_calculation::greatCircleDistance(
+                            parameters.coordinates[i],
+                            best_match->phantom_node.location);
+
+                    if (candidate_distance < best_distance)
+                    {
+                        best_match = candidate;
+                    }
+                }
+
+                if (best_match != street_candidates.end())
+                {
+                    const auto selected_location =
+                        best_match->phantom_node.location;
+
+                    for (const auto &candidate : street_candidates)
+                    {
+                        if (candidate.phantom_node.location ==
+                                selected_location &&
+                            PhantomMatchesStreet(
+                                facade,
+                                candidate.phantom_node,
+                                normalized_expected_street))
+                        {
+                            alternatives[i].first.push_back(
+                                candidate.phantom_node);
+                        }
+                    }
+
+                    selected_street_candidate =
+                        !alternatives[i].first.empty();
+                }
+            }
+
+            if (!selected_street_candidate)
+            {
+                alternatives[i] =
+                    facade.NearestCandidatesWithAlternativeFromBigComponent(
+                        parameters.coordinates[i],
+                        use_radiuses ? parameters.radiuses[i] : boost::none,
+                        use_bearings ? parameters.bearings[i] : boost::none,
+                        approach,
+                        use_all_edges);
+            }
 
             // we didn't find a fitting node, return error
             if (alternatives[i].first.empty())
