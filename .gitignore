@@ -112,3 +112,4 @@ lib/binding
 /node_modules/
 /data/**/*.osm.pbf
 /data/**/*.osrm*
+/data/virginia/
